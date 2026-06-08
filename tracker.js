@@ -21,8 +21,8 @@ function readEvents() {
 }
 
 const transporter = nodemailer.createTransport({
-  host: 'smtps.aruba.it', port: 465, secure: true,
-  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  host: 'smtp.resend.com', port: 465, secure: true,
+  auth: { user: 'resend', pass: process.env.RESEND_API_KEY },
 });
 
 const sessions = new Map();
@@ -30,7 +30,7 @@ const sessions = new Map();
 async function notify(subject, html) {
   try {
     await transporter.sendMail({
-      from: '"Lemons Tracker 🍋" <niccolo@lemonsintheroom.com>',
+      from: '"Lemons Tracker 🍋" <onboarding@resend.dev>',
       to: 'niccolo@lemonsintheroom.com',
       subject, html,
     });

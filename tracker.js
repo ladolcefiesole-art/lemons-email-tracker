@@ -143,9 +143,7 @@ app.get('/opens', async (req, res) => {
 
 app.get('/health', (_, res) => res.json({ ok: true }));
 
-initDb()
-  .then(() => {
-    const PORT = process.env.PORT || 3001;
-    app.listen(PORT, () => console.log(`Tracker running on port ${PORT}`));
-  })
-  .catch(err => { console.error('DB init failed:', err); process.exit(1); });
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`Tracker running on port ${PORT}`));
+
+initDb().catch(err => console.error('DB init failed (will retry on next request):', err.message));

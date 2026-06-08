@@ -4,9 +4,9 @@ const nodemailer = require('nodemailer');
 
 const app = express();
 
-const dbUrl = (process.env.DATABASE_URL || '').replace(/\?.*$/, '');
 const pool = new Pool({
-  connectionString: dbUrl + '?sslmode=no-verify',
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('.railway.internal') ? false : { rejectUnauthorized: false },
   connectionTimeoutMillis: 15000,
   idleTimeoutMillis: 30000,
 });

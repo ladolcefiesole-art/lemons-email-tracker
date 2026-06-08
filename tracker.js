@@ -1,54 +1,42 @@
 const express = require('express');
-const { Pool } = require('pg');
+const Database = require('better-sqlite3');
 const nodemailer = require('nodemailer');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 
-// Use public URL for cross-region access
-const DATABASE_URL = (process.env.DATABASE_URL || '')
-  .replace('postgres.railway.internal:5432', 'caboose.proxy.rlwy.net:23681');
+const DB_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname;
+const DB_PATH = path.join(DB_DIR, 'tracker.db');
+const db = new Database(DB_PATH);
 
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-  connectionTimeoutMillis: 15000,
-  idleTimeoutMillis: 30000,
-});
+db.exec(`
+  CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contact_id TEXT,
+    to_email TEXT,
+    event TEXT,
+    ip TEXT,
+    hint TEXT,
+    label TEXT,
+    url TEXT,
+    file_name TEXT,
+    file_label TEXT,
+    at TEXT DEFAULT (datetime('now'))
+  )
+`);
+
+const insertEvent = db.prepare(`
+  INSERT INTO events (contact_id, to_email, event, ip, hint, label, url, file_name, file_label)
+  VALUES (@id, @to, @event, @ip, @hint, @label, @url, @file, @name)
+`);
 
 const transporter = nodemailer.createTransport({
   host: 'smtps.aruba.it', port: 465, secure: true,
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
 });
 
-const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 const sessions = new Map();
-
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS events (
-      id SERIAL PRIMARY KEY,
-      contact_id TEXT,
-      to_email TEXT,
-      event TEXT,
-      ip TEXT,
-      hint TEXT,
-      label TEXT,
-      url TEXT,
-      file_name TEXT,
-      file_label TEXT,
-      at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-}
-
-async function logEvent(data) {
-  await pool.query(
-    `INSERT INTO events (contact_id, to_email, event, ip, hint, label, url, file_name, file_label)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [data.id, data.to || null, data.event, data.ip || null, data.hint || null,
-     data.label || null, data.url || null, data.file || null, data.name || null]
-  );
-}
 
 async function notify(subject, html) {
   try {
@@ -71,12 +59,12 @@ function extractForwarderHint(ua, headers) {
 
 app.get('/track', async (req, res) => {
   res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store' });
-  res.send(PIXEL);
+  res.send(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
 
   const { id, to } = req.query;
   if (!id) return;
 
-  const ip = getIp(req), now = new Date().toISOString(), ua = req.headers['user-agent'] || '';
+  const ip = getIp(req), ua = req.headers['user-agent'] || '';
   let session = sessions.get(id);
   const isFirstOpen = !session;
 
@@ -86,7 +74,8 @@ app.get('/track', async (req, res) => {
   if (!isFirstOpen && ip !== session.firstIp && !session.forwarded) {
     session.forwarded = true;
     const hint = extractForwarderHint(ua, req.headers);
-    await logEvent({ id, to, event: 'forward', ip, hint });
+    insertEvent.run({ id, to: to || null, event: 'forward', ip, hint: hint || null, label: null, url: null, file: null, name: null });
+    const now = new Date().toISOString();
     await notify(
       `📨 ${id} ha inoltrato la tua mail`,
       `<div style="font-family:Arial,sans-serif;font-size:14px;color:#03091B;">
@@ -97,10 +86,11 @@ app.get('/track', async (req, res) => {
     );
   }
 
-  await logEvent({ id, to, event: 'open', ip });
+  insertEvent.run({ id, to: to || null, event: 'open', ip, hint: null, label: null, url: null, file: null, name: null });
 
   if (isFirstOpen || session.opens % 5 === 0) {
     const n = session.opens, label = to ? `${id} (${to})` : id;
+    const now = new Date().toISOString();
     await notify(
       `👁 ${label} ha aperto la tua mail${n > 1 ? ` (${n}ª volta)` : ''}`,
       `<div style="font-family:Arial,sans-serif;font-size:14px;color:#03091B;">
@@ -115,8 +105,8 @@ app.get('/track', async (req, res) => {
 app.get('/click', async (req, res) => {
   const { id, label, url } = req.query;
   if (!url) return res.redirect('https://lemonsintheroom.com');
+  insertEvent.run({ id, to: null, event: 'click', ip: getIp(req), hint: null, label: label || null, url, file: null, name: null });
   const now = new Date().toISOString();
-  await logEvent({ id, event: 'click', label, url, ip: getIp(req) });
   const emoji = url.includes('cal.com') ? '📅' : url.includes('linkedin') ? '💼' : '🌐';
   await notify(
     `${emoji} ${id} ha cliccato su "${label || url}"`,
@@ -128,26 +118,30 @@ app.get('/click', async (req, res) => {
   res.redirect(url);
 });
 
-app.get('/opens', async (req, res) => {
-  const { rows } = await pool.query(`
-    SELECT contact_id as id, to_email,
-      COUNT(*) FILTER (WHERE event='open') as opens,
-      BOOL_OR(event='forward') as forwarded,
-      MAX(at) FILTER (WHERE event='open') as last_open,
-      JSON_AGG(JSON_BUILD_OBJECT('label',label,'url',url,'at',at) ORDER BY at)
-        FILTER (WHERE event='click') as clicks,
-      JSON_AGG(JSON_BUILD_OBJECT('name',file_label,'at',at) ORDER BY at)
-        FILTER (WHERE event='download') as downloads
+app.get('/opens', (req, res) => {
+  const rows = db.prepare(`
+    SELECT
+      contact_id as id,
+      to_email,
+      COUNT(CASE WHEN event='open' THEN 1 END) as opens,
+      MAX(CASE WHEN event='open' THEN at END) as last_open,
+      MAX(CASE WHEN event='forward' THEN 1 ELSE 0 END) as forwarded
     FROM events
     GROUP BY contact_id, to_email
-    ORDER BY last_open DESC NULLS LAST
-  `);
-  res.json(rows);
+    ORDER BY last_open DESC
+  `).all();
+
+  const clicks = db.prepare(`SELECT contact_id, label, url, at FROM events WHERE event='click' ORDER BY at`).all();
+  const clickMap = {};
+  clicks.forEach(c => {
+    if (!clickMap[c.contact_id]) clickMap[c.contact_id] = [];
+    clickMap[c.contact_id].push({ label: c.label, url: c.url, at: c.at });
+  });
+
+  res.json(rows.map(r => ({ ...r, forwarded: !!r.forwarded, clicks: clickMap[r.id] || [] })));
 });
 
 app.get('/health', (_, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Tracker running on port ${PORT}`));
-
-initDb().catch(err => console.error('DB init failed (will retry on next request):', err.message));

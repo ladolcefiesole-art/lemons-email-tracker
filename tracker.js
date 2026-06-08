@@ -4,9 +4,13 @@ const nodemailer = require('nodemailer');
 
 const app = express();
 
+// Use public URL for cross-region access
+const DATABASE_URL = (process.env.DATABASE_URL || '')
+  .replace('postgres.railway.internal:5432', 'caboose.proxy.rlwy.net:23681');
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('.railway.internal') ? false : { rejectUnauthorized: false },
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
   connectionTimeoutMillis: 15000,
   idleTimeoutMillis: 30000,
 });

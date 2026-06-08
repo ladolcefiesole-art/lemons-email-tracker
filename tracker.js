@@ -6,7 +6,8 @@ const app = express();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  ssl: { rejectUnauthorized: false },
+  connectionTimeoutMillis: 10000,
 });
 
 const transporter = nodemailer.createTransport({

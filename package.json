@@ -1,0 +1,17 @@
+{
+  "name": "lemons-email-tracker",
+  "version": "1.0.0",
+  "description": "Email open tracker per Lemons in the room",
+  "main": "tracker.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node tracker.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "nodemailer": "^6.9.7",
+    "pg": "^8.11.3"
+  }
+}

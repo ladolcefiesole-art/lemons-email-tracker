@@ -4,10 +4,12 @@ const nodemailer = require('nodemailer');
 
 const app = express();
 
+const dbUrl = process.env.DATABASE_URL || '';
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: dbUrl.includes('sslmode') ? dbUrl : dbUrl + '?sslmode=require',
   ssl: { rejectUnauthorized: false },
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: 15000,
+  idleTimeoutMillis: 30000,
 });
 
 const transporter = nodemailer.createTransport({

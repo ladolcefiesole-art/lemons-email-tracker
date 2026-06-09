@@ -196,11 +196,14 @@ app.post('/cal-booking', express.json(), async (req, res) => {
     if (aziendaRelation.length) crmProps['Azienda '] = { relation: aziendaRelation };
 
     if (notionToken) {
-      await fetch('https://api.notion.com/v1/pages', {
+      const crmRes = await fetch('https://api.notion.com/v1/pages', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${notionToken}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({ parent: { database_id: crmDb }, properties: crmProps })
       });
+      const crmData = await crmRes.json();
+      if (!crmRes.ok) console.error('CRM create error:', JSON.stringify(crmData));
+      else console.log('CRM contact created:', crmData.id);
     }
 
     // 3. Ricerca info sull'azienda via DuckDuckGo Instant Answer

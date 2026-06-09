@@ -203,7 +203,20 @@ app.post('/cal-booking', express.json(), async (req, res) => {
       });
     }
 
-    // 3. Email briefing a Niccolò
+    // 3. Ricerca info sull'azienda via DuckDuckGo Instant Answer
+    let aziendaInfo = '';
+    if (azienda) {
+      try {
+        const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(azienda)}&format=json&no_html=1&skip_disambig=1`;
+        const ddgRes = await fetch(ddgUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const ddg = await ddgRes.json();
+        const abstract = ddg.AbstractText || ddg.Answer || '';
+        const related = (ddg.RelatedTopics || []).slice(0,2).map(t => t.Text || '').filter(Boolean).join(' ');
+        aziendaInfo = (abstract || related).substring(0, 500);
+      } catch(e) { /* silenzioso */ }
+    }
+
+    // 4. Email briefing a Niccolò
     const dateLabel = start ? new Date(start).toLocaleString('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'full', timeStyle: 'short' }) : bookingDate;
     await notify(
       `📅 Nuovo booking Cal.com — ${name}${azienda ? ', ' + azienda : ''}`,
@@ -217,6 +230,11 @@ app.post('/cal-booking', express.json(), async (req, res) => {
           <tr><td style="color:#888;">Evento</td><td>${title}</td></tr>
           ${meet ? `<tr><td style="color:#888;">Meet</td><td><a href="${meet}">${meet}</a></td></tr>` : ''}
         </table>
+        ${aziendaInfo ? `
+        <div style="margin-top:16px;padding:12px;background:#f9f9f9;border-left:3px solid #FF8731;border-radius:4px;">
+          <div style="font-size:12px;font-weight:bold;color:#FF8731;margin-bottom:6px;">📍 ${azienda}</div>
+          <div style="font-size:13px;color:#444;">${aziendaInfo}</div>
+        </div>` : ''}
         <p style="margin-top:16px;color:#888;font-size:12px;">Contatto aggiunto nel CRM Notion • Channel: Cal.com • Pipeline: Lead Generation</p>
       </div>`
     );

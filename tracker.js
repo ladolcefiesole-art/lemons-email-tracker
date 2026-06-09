@@ -20,23 +20,28 @@ function readEvents() {
   }).filter(Boolean);
 }
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.resend.com', port: 587, secure: false,
-  auth: { user: 'resend', pass: process.env.RESEND_API_KEY },
-});
-
 const sessions = new Map();
 
 async function notify(subject, html) {
   try {
     console.log('Notify sending:', subject);
-    await transporter.sendMail({
-      from: '"Lemons Tracker 🍋" <tracker@lemonsintheroom.com>',
-      to: 'niccolo@lemonsintheroom.com',
-      subject, html,
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: '"Lemons Tracker 🍋" <tracker@lemonsintheroom.com>',
+        to: 'niccolo@lemonsintheroom.com',
+        subject,
+        html,
+      }),
     });
-    console.log('Notify sent OK');
-  } catch (err) { console.error('Notify failed:', err.message, err.code); }
+    const data = await res.json();
+    if (res.ok) { console.log('Notify sent OK', data.id); }
+    else { console.error('Notify failed:', JSON.stringify(data)); }
+  } catch (err) { console.error('Notify error:', err.message); }
 }
 
 function getIp(req) { return (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim(); }
@@ -143,19 +148,34 @@ app.post('/cal-booking', express.json(), async (req, res) => {
     const aziendaDb   = '1d5e69fb-b9e6-8001-ba04-eb705213fb30';
     const niccoloId   = '9d6e79b1-83bb-4b3e-a11a-f0a7a2060d44';
 
-    // 1. Crea azienda su Notion (se fornita)
+    // 1. Cerca azienda esistente nel db Notion, altrimenti la crea
     let aziendaRelation = [];
     if (azienda && notionToken) {
-      const aziendaRes = await fetch('https://api.notion.com/v1/pages', {
+      const searchRes = await fetch(`https://api.notion.com/v1/databases/${aziendaDb}/query`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${notionToken}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          parent: { database_id: aziendaDb },
-          properties: { 'Nome Struttura': { title: [{ text: { content: azienda } }] } }
+          filter: { property: 'Nome Struttura', title: { equals: azienda } },
+          page_size: 1
         })
       });
-      const aziendaPage = await aziendaRes.json();
-      if (aziendaPage.id) aziendaRelation = [{ id: aziendaPage.id }];
+      const searchData = await searchRes.json();
+      if (searchData.results?.length > 0) {
+        // Azienda già esistente — usa quella
+        aziendaRelation = [{ id: searchData.results[0].id }];
+      } else {
+        // Non esiste — crea nuova
+        const aziendaRes = await fetch('https://api.notion.com/v1/pages', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${notionToken}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            parent: { database_id: aziendaDb },
+            properties: { 'Nome Struttura': { title: [{ text: { content: azienda } }] } }
+          })
+        });
+        const aziendaPage = await aziendaRes.json();
+        if (aziendaPage.id) aziendaRelation = [{ id: aziendaPage.id }];
+      }
     }
 
     // 2. Crea contatto nel CRM

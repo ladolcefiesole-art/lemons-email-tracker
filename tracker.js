@@ -121,6 +121,90 @@ app.get('/opens', (req, res) => {
   res.json(Object.values(map).sort((a, b) => (b.last_open || '').localeCompare(a.last_open || '')));
 });
 
+// Cal.com webhook — BOOKING_CREATED
+app.post('/cal-booking', express.json(), async (req, res) => {
+  res.sendStatus(200);
+  try {
+    const payload = req.body;
+    const booking = payload?.payload || payload;
+
+    const name    = booking?.attendees?.[0]?.name || booking?.responses?.name?.value || '';
+    const email   = booking?.attendees?.[0]?.email || booking?.responses?.email?.value || '';
+    const azienda = booking?.responses?.azienda?.value || '';
+    const ruolo   = booking?.responses?.ruolo?.value || '';
+    const title   = booking?.title || booking?.eventType?.title || '';
+    const start   = booking?.startTime || booking?.responses?.startTime?.value || '';
+    const meet    = booking?.metadata?.videoCallUrl || booking?.videoCallUrl || '';
+
+    const notionToken = process.env.NOTION_TOKEN;
+    const crmDb       = '68ab8708-9f38-4053-a0e4-0d08c79dec8d';
+    const aziendaDb   = '1d5e69fb-b9e6-8001-ba04-eb705213fb30';
+    const niccoloId   = '9d6e79b1-83bb-4b3e-a11a-f0a7a2060d44';
+
+    // 1. Crea azienda su Notion (se fornita)
+    let aziendaRelation = [];
+    if (azienda && notionToken) {
+      const aziendaRes = await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${notionToken}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: aziendaDb },
+          properties: { 'Nome Struttura': { title: [{ text: { content: azienda } }] } }
+        })
+      });
+      const aziendaPage = await aziendaRes.json();
+      if (aziendaPage.id) aziendaRelation = [{ id: aziendaPage.id }];
+    }
+
+    // 2. Crea contatto nel CRM
+    const bookingDate = start ? start.split('T')[0] : new Date().toISOString().split('T')[0];
+    const crmProps = {
+      'Persona':      { title: [{ text: { content: name } }] },
+      'Mail':         { rich_text: [{ text: { content: email } }] },
+      'Pipeline':     { status: { name: 'Lead Generation' } },
+      'Channel':      { multi_select: [{ name: 'Cal.com' }] },
+      'Origin':       { select: { name: 'Inbound' } },
+      'Relathionship':{ multi_select: [{ name: 'Lead' }] },
+      'PR Manager':   { people: [{ object: 'user', id: niccoloId }] },
+      'Discovery':    { date: { start: bookingDate } },
+      'Reminder':     { date: { start: bookingDate } },
+      'Generation':   { date: { start: new Date().toISOString().split('T')[0] } },
+    };
+    if (ruolo) crmProps['Ruolo'] = { multi_select: [{ name: ruolo }] };
+    if (aziendaRelation.length) crmProps['Azienda '] = { relation: aziendaRelation };
+
+    if (notionToken) {
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${notionToken}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent: { database_id: crmDb }, properties: crmProps })
+      });
+    }
+
+    // 3. Email briefing a Niccolò
+    const dateLabel = start ? new Date(start).toLocaleString('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'full', timeStyle: 'short' }) : bookingDate;
+    await notify(
+      `📅 Nuovo booking Cal.com — ${name}${azienda ? ', ' + azienda : ''}`,
+      `<div style="font-family:Arial,sans-serif;font-size:14px;color:#03091B;line-height:1.6;">
+        <h3 style="color:#FF8731;margin:0 0 12px;">📅 Nuova call prenotata</h3>
+        <table cellpadding="4" cellspacing="0" border="0">
+          <tr><td style="color:#888;width:100px;">Chi</td><td><strong>${name}</strong> — ${email}</td></tr>
+          ${azienda ? `<tr><td style="color:#888;">Azienda</td><td>${azienda}</td></tr>` : ''}
+          ${ruolo   ? `<tr><td style="color:#888;">Ruolo</td><td>${ruolo}</td></tr>` : ''}
+          <tr><td style="color:#888;">Quando</td><td>${dateLabel}</td></tr>
+          <tr><td style="color:#888;">Evento</td><td>${title}</td></tr>
+          ${meet ? `<tr><td style="color:#888;">Meet</td><td><a href="${meet}">${meet}</a></td></tr>` : ''}
+        </table>
+        <p style="margin-top:16px;color:#888;font-size:12px;">Contatto aggiunto nel CRM Notion • Channel: Cal.com • Pipeline: Lead Generation</p>
+      </div>`
+    );
+
+    appendEvent({ type: 'cal_booking', name, email, azienda, ruolo, start });
+  } catch (err) {
+    console.error('cal-booking error:', err.message);
+  }
+});
+
 app.get('/health', (_, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3001;

@@ -29,12 +29,14 @@ const sessions = new Map();
 
 async function notify(subject, html) {
   try {
+    console.log('Notify sending:', subject);
     await transporter.sendMail({
       from: '"Lemons Tracker 🍋" <tracker@lemonsintheroom.com>',
       to: 'niccolo@lemonsintheroom.com',
       subject, html,
     });
-  } catch (err) { console.error('Notify failed:', err.message); }
+    console.log('Notify sent OK');
+  } catch (err) { console.error('Notify failed:', err.message, err.code); }
 }
 
 function getIp(req) { return (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim(); }

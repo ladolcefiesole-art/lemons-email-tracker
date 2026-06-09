@@ -252,3 +252,82 @@ app.get('/health', (_, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Tracker running on port ${PORT}`));
+
+// ─── SMTP PROXY ───────────────────────────────────────────────────────────────
+const { SMTPServer } = require('smtp-server');
+const { simpleParser } = require('mailparser');
+
+const aruba = nodemailer.createTransport({
+  host: 'smtps.aruba.it', port: 465, secure: true,
+  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+});
+
+const TRACKER = 'https://tracker-production-348b.up.railway.app';
+const FIRM_STATIC = {
+  'https://lemonsintheroom.com': 'sito',
+  'https://www.linkedin.com/company/lemonsintheroom/': 'linkedin',
+  'https://cal.com/lemons/vr?overlayCalendar=true': 'cal',
+};
+
+function injectTracking(html, contactId, toEmail) {
+  if (!html) return html;
+  // wrap firm links
+  let out = html;
+  for (const [url, label] of Object.entries(FIRM_STATIC)) {
+    const tracked = `${TRACKER}/click?id=${encodeURIComponent(contactId)}&url=${encodeURIComponent(url)}&label=${label}`;
+    out = out.split(url).join(tracked);
+  }
+  // inject pixel before </body> or at end
+  const pixel = `<img src="${TRACKER}/track?id=${encodeURIComponent(contactId)}&to=${encodeURIComponent(toEmail)}" width="1" height="1" style="display:none;border:0;" />`;
+  if (out.includes('</body>')) {
+    out = out.replace('</body>', pixel + '</body>');
+  } else {
+    out += pixel;
+  }
+  return out;
+}
+
+const smtpServer = new SMTPServer({
+  authOptional: true,
+  disabledCommands: ['STARTTLS'],
+  onData(stream, session, callback) {
+    let raw = [];
+    stream.on('data', chunk => raw.push(chunk));
+    stream.on('end', async () => {
+      try {
+        const buffer = Buffer.concat(raw);
+        const parsed = await simpleParser(buffer);
+
+        const toAddresses = (parsed.to?.value || []).map(a => a.address);
+        const toEmail = toAddresses[0] || '';
+        const contactId = toEmail.split('@')[0].replace(/[^a-z0-9]/gi, '-').toLowerCase();
+
+        const html = injectTracking(parsed.html || '', contactId, toEmail);
+
+        await aruba.sendMail({
+          from: parsed.from?.text || process.env.SMTP_USER,
+          to: toAddresses,
+          cc: (parsed.cc?.value || []).map(a => a.address),
+          bcc: (parsed.bcc?.value || []).map(a => a.address),
+          subject: parsed.subject,
+          html,
+          text: parsed.text,
+          attachments: (parsed.attachments || []).map(a => ({
+            filename: a.filename,
+            content: a.content,
+            contentType: a.contentType,
+          })),
+        });
+
+        console.log(`SMTP proxy: sent to ${toEmail} (id: ${contactId})`);
+        callback();
+      } catch (err) {
+        console.error('SMTP proxy error:', err.message);
+        callback(new Error('Failed to relay'));
+      }
+    });
+  },
+});
+
+const SMTP_PORT = process.env.SMTP_PORT || 2525;
+smtpServer.listen(SMTP_PORT, () => console.log(`SMTP proxy on port ${SMTP_PORT}`));

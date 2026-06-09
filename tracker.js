@@ -30,7 +30,7 @@ const sessions = new Map();
 async function notify(subject, html) {
   try {
     await transporter.sendMail({
-      from: '"Lemons Tracker 🍋" <onboarding@resend.dev>',
+      from: '"Lemons Tracker 🍋" <tracker@lemonsintheroom.com>',
       to: 'niccolo@lemonsintheroom.com',
       subject, html,
     });
